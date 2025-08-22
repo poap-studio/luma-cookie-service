@@ -1,16 +1,17 @@
 const dotenv = require('dotenv');
 const { CookieScheduler } = require('./services/scheduler');
+const { WebhookServer } = require('./services/webhook-server');
 const logger = require('./utils/logger');
 
 // Load environment variables
 dotenv.config();
 
-// Initialize and start the scheduler
+// Initialize and start the services
 async function main() {
   try {
     logger.info('Starting Luma Cookie Service...');
     
-    const scheduler = new CookieScheduler({
+    const config = {
       luma: {
         email: process.env.LUMA_EMAIL || 'admin@poap.fr',
         password: process.env.LUMA_PASSWORD || '!q*g%@TP7w^q'
@@ -24,23 +25,32 @@ async function main() {
         url: process.env.WEBHOOK_URL,
         secret: process.env.WEBHOOK_SECRET
       }
-    });
+    };
 
     // Start the scheduler
+    const scheduler = new CookieScheduler(config);
     scheduler.start();
+    
+    // Start the webhook server
+    const webhookServer = new WebhookServer(config);
+    webhookServer.start(3001);
     
     logger.info('Luma Cookie Service started successfully');
     
-    // Handle graceful shutdown
-    process.on('SIGINT', () => {
-      logger.info('Received SIGINT, shutting down gracefully...');
-      process.exit(0);
-    });
+    // Send ready signal to PM2
+    if (process.send) {
+      process.send('ready');
+    }
     
-    process.on('SIGTERM', () => {
-      logger.info('Received SIGTERM, shutting down gracefully...');
+    // Handle graceful shutdown
+    const shutdown = () => {
+      logger.info('Shutting down gracefully...');
+      webhookServer.stop();
       process.exit(0);
-    });
+    };
+    
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
     
   } catch (error) {
     logger.error('Failed to start service:', error);
@@ -48,4 +58,8 @@ async function main() {
   }
 }
 
-main();
+// Start the service
+main().catch(error => {
+  logger.error('Unhandled error:', error);
+  process.exit(1);
+});

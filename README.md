@@ -120,6 +120,9 @@ The service is deployed as follows:
 # On your local machine
 git push origin master
 
+# Or clone from the organization repository
+git clone https://github.com/poap-studio/luma-cookie-service.git
+
 # On the EC2 instance
 ssh -i luma-cookie-service.pem ubuntu@54.147.7.9
 cd /home/ubuntu/luma-cookie-service

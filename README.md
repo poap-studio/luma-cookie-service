@@ -1,6 +1,6 @@
 # Luma Cookie Service
 
-Automated service to renew Luma session cookies for the POAP platform. This service runs on AWS EC2 and updates the cookie every 24 hours.
+Automated service that maintains fresh Luma authentication cookies for the POAP platform. It periodically extracts cookies from Luma using Puppeteer and saves them directly to the database every 4 hours.
 
 ## AWS Infrastructure
 
@@ -11,7 +11,6 @@ Automated service to renew Luma session cookies for the POAP platform. This serv
 - **Instance Type**: `t2.micro`
 - **Security Group**: `sg-03cad80bf001c61f1` (luma-cookie-service-sg)
   - Port 22 (SSH) - Open to 0.0.0.0/0
-  - Port 3001 (Webhook) - Open to 0.0.0.0/0
 
 ### Access Credentials
 - **AWS Account**: POAP Studio (Account ID: 893980883769)
@@ -47,82 +46,83 @@ aws ec2 stop-instances --instance-ids i-080272c5028db9c74
 aws ec2 start-instances --instance-ids i-080272c5028db9c74
 ```
 
-## Service Configuration
+## Features
 
-### Environment Variables
-The service uses the following environment variables (configured in `/home/ubuntu/luma-cookie-service/.env`):
-- `LUMA_EMAIL`: admin@poap.fr
-- `LUMA_PASSWORD`: !q*g%@TP7w^q
-- `NODE_ENV`: production
-- `WEBHOOK_URL`: http://54.147.7.9:3001/webhook
-- `WEBHOOK_SECRET`: 37c860512fe98aafe08b3042dc03fb28a33612df70ed79518db1119f9ebc1021
+1. **Cookie Extraction**: Uses Puppeteer to login to Luma and extract session cookies
+2. **Cookie Validation**: Tests extracted cookies before saving
+3. **Database Update**: Saves the cookie directly to the PostgreSQL database
+4. **Cleanup**: Removes old and invalid cookies from the database
 
-### Service Management
+## Operation
+
+- Runs automatically every 4 hours
+- Manual trigger via PM2: `pm2 trigger luma-cookie-service update`
+- Automatic cleanup of cookies older than 30 days
+
+## Installation
+
+1. Clone the repository and install dependencies:
+```bash
+git clone https://github.com/gotoalberto/luma-cookie-service.git
+cd luma-cookie-service
+npm install
+```
+
+2. Create a `.env` file with your configuration:
+```bash
+# Luma Credentials
+LUMA_EMAIL=your-email@example.com
+LUMA_PASSWORD=your-password
+
+# Database Configuration
+DATABASE_URL=postgresql://user:password@host:port/database
+
+# PM2 Process Name (Optional)
+PM2_NAME=luma-cookie-service
+```
+
+### Database Setup
+
+Ensure your PostgreSQL database has the LumaCookie table. If using with poap-farcaster-saas, the schema is already included.
+
+### PM2 Deployment
+
+Start the service with PM2:
+```bash
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup
+```
+
+## Service Management
+
+### Check Status
 ```bash
 # SSH into the server
 ssh -i luma-cookie-service.pem ubuntu@54.147.7.9
 
 # Check service status
 pm2 status
-sudo systemctl status luma-cookie-service
 
 # View logs
 pm2 logs luma-cookie-service
-
-# Restart service
-pm2 restart luma-cookie-service
-
-# Update from GitHub
-cd /home/ubuntu/luma-cookie-service
-git pull
-npm install
-pm2 restart luma-cookie-service
 ```
 
-### Endpoints
-- **Health Check**: http://54.147.7.9:3001/health
-- **Webhook**: http://54.147.7.9:3001/webhook
+### Manual Update
 
-## Vercel Integration
+Trigger a manual cookie update:
+```bash
+pm2 trigger luma-cookie-service update
+```
 
-Configure these environment variables in your Vercel project:
-- `LUMA_COOKIE_WEBHOOK_URL`: http://54.147.7.9:3001/webhook
-- `LUMA_COOKIE_WEBHOOK_SECRET`: 37c860512fe98aafe08b3042dc03fb28a33612df70ed79518db1119f9ebc1021
+### Check Logs
 
-## Features
-
-- Automated cookie extraction using Puppeteer
-- Daily renewal at 2 AM (UTC)
-- Automatic restart on failure with PM2
-- Webhook server for external notifications
-- Systemd service integration for auto-start on reboot
-- Health check endpoint for monitoring
-
-## Architecture
-
-- **PM2**: Process management and auto-restart
-- **Systemd**: System service integration  
-- **Puppeteer**: Browser automation for cookie extraction
-- **Node-cron**: Scheduled tasks (cron: `0 2 * * *`)
-- **Express**: Webhook server
-- **Winston**: Logging
-
-## Deployment
-
-The service is deployed as follows:
-1. Node.js application managed by PM2
-2. PM2 is configured to start on system boot via systemd
-3. Service runs as user `ubuntu`
-4. Logs are stored in `/home/ubuntu/luma-cookie-service/logs/`
+```bash
+pm2 logs luma-cookie-service
+```
 
 ### Update Deployment
 ```bash
-# On your local machine
-git push origin master
-
-# Or clone from the organization repository
-git clone https://github.com/poap-studio/luma-cookie-service.git
-
 # On the EC2 instance
 ssh -i luma-cookie-service.pem ubuntu@54.147.7.9
 cd /home/ubuntu/luma-cookie-service
@@ -131,19 +131,34 @@ npm install
 pm2 restart luma-cookie-service
 ```
 
-## Monitoring
+## Project Structure
 
-### Check if service is running
-```bash
-curl http://54.147.7.9:3001/health
-# Should return: {"status":"ok","timestamp":"..."}
+```
+/src
+  /services
+    - cookie-extractor.js    # Puppeteer logic for cookie extraction
+    - scheduler.js          # Cron job management
+    - database-updater.js   # Database integration
+  /utils
+    - logger.js            # Winston logging configuration
+  - index.js              # Main application entry point
 ```
 
-### View recent logs
-```bash
-ssh -i luma-cookie-service.pem ubuntu@54.147.7.9
-pm2 logs luma-cookie-service --lines 100
-```
+## Technical Details
+
+- Cookie extraction uses headless Chrome via Puppeteer
+- Logs are written to `app.log` and console
+- Failed updates will retry up to 3 times
+- Old cookies are automatically cleaned up after 30 days
+- The service runs every 4 hours to ensure fresh cookies
+
+## Architecture
+
+- **PM2**: Process management and auto-restart
+- **Puppeteer**: Browser automation for cookie extraction
+- **Node-cron**: Scheduled tasks (cron: `0 */4 * * *`)
+- **Prisma**: Database ORM for PostgreSQL
+- **Winston**: Logging
 
 ## Troubleshooting
 
@@ -154,19 +169,13 @@ pm2 logs luma-cookie-service --lines 100
 
 ### Service doesn't start
 - Check PM2 status: `pm2 status`
-- Check systemd status: `sudo systemctl status pm2-ubuntu`
 - Review error logs: `pm2 logs luma-cookie-service --err`
+- Verify database connection string
 
-### Cannot connect to service
-- Verify security group allows traffic on port 3001
-- Check if service is listening: `sudo ss -tlnp | grep 3001`
-- Ensure instance is running in AWS console
-
-## Cost Optimization
-
-- Instance type: t2.micro (eligible for AWS free tier)
-- Consider using Reserved Instances for long-term cost savings
-- Monitor usage with AWS Cost Explorer
+### Database connection issues
+- Verify DATABASE_URL in `.env`
+- Check network connectivity to database
+- Ensure database user has proper permissions
 
 ## Backup and Recovery
 

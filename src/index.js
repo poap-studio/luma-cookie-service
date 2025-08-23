@@ -1,6 +1,5 @@
 const dotenv = require('dotenv');
 const { CookieScheduler } = require('./services/scheduler');
-const { WebhookServer } = require('./services/webhook-server');
 const logger = require('./utils/logger');
 
 // Load environment variables
@@ -15,25 +14,12 @@ async function main() {
       luma: {
         email: process.env.LUMA_EMAIL || 'admin@poap.fr',
         password: process.env.LUMA_PASSWORD || '!q*g%@TP7w^q'
-      },
-      vercel: {
-        token: process.env.VERCEL_TOKEN,
-        projectId: process.env.VERCEL_PROJECT_ID,
-        envId: process.env.VERCEL_ENV_ID
-      },
-      webhook: {
-        url: process.env.WEBHOOK_URL,
-        secret: process.env.WEBHOOK_SECRET
       }
     };
 
     // Start the scheduler
     const scheduler = new CookieScheduler(config);
     scheduler.start();
-    
-    // Start the webhook server
-    const webhookServer = new WebhookServer(config);
-    webhookServer.start(3001);
     
     logger.info('Luma Cookie Service started successfully');
     
@@ -45,7 +31,6 @@ async function main() {
     // Handle graceful shutdown
     const shutdown = () => {
       logger.info('Shutting down gracefully...');
-      webhookServer.stop();
       process.exit(0);
     };
     

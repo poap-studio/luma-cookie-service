@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  fid          Int?     @unique
+  username     String
+  displayName  String?
+  profileImage String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  email        String?  @unique
+  googleId     String?  @unique
+  provider     String   @default("farcaster")
+  drops        Drop[]
+}
+
+model Drop {
+  id                String   @id @default(cuid())
+  slug              String   @unique @default(cuid())
+  userId            String
+  poapEventId       String
+  poapSecretCode    String
+  buttonColor       String   @default("#0a5580")
+  backgroundColor   String   @default("#073d5c")
+  logoUrl           String?
+  mintMessage       String   @default("This POAP celebrates the Farcaster community and our journey together.")
+  requireFollow     Boolean  @default(true)
+  followUsername    String?
+  requireRecast     Boolean  @default(true)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  disclaimerMessage String   @default("By minting this POAP you accept these terms: https://poap.xyz/terms")
+  requireQuote      Boolean  @default(false)
+  platform          String   @default("farcaster")
+  lumaEventId       String?
+  deliveryMethod    String?
+  lumaEventUrl      String?
+  emailSubject      String?
+  emailBody         String?
+  deliveryTarget    String   @default("email")
+  claims            Claim[]
+  lumaDeliveries    LumaDelivery[]
+  lumaGuests        LumaGuest[]
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([slug])
+  @@index([platform])
+}
+
+model Claim {
+  id        String   @id @default(cuid())
+  dropId    String
+  fid       Int
+  address   String
+  txHash    String?
+  claimedAt DateTime @default(now())
+  username  String?
+  followers Int?
+  drop      Drop     @relation(fields: [dropId], references: [id], onDelete: Cascade)
+
+  @@unique([dropId, fid])
+  @@index([dropId])
+  @@index([fid])
+}
+
+model LumaDelivery {
+  id          String   @id @default(cuid())
+  dropId      String
+  guestId     String
+  email       String
+  name        String
+  poapLink    String
+  sentAt      DateTime @default(now())
+  checkedInAt DateTime?
+  drop        Drop     @relation(fields: [dropId], references: [id], onDelete: Cascade)
+
+  @@unique([dropId, guestId])
+  @@index([dropId])
+  @@index([email])
+}
+
+model LumaGuest {
+  id               String   @id @default(cuid())
+  dropId           String
+  guestId          String
+  email            String
+  name             String
+  firstName        String?
+  lastName         String?
+  registeredAt     DateTime
+  checkedInAt      DateTime?
+  ethAddress       String?
+  solanaAddress    String?
+  phoneNumber      String?
+  geoCity          String?
+  geoCountry       String?
+  avatarUrl        String?
+  twitterHandle    String?
+  instagramHandle  String?
+  linkedinHandle   String?
+  website          String?
+  approvalStatus   String?
+  lastSyncedAt     DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  drop             Drop     @relation(fields: [dropId], references: [id], onDelete: Cascade)
+
+  @@unique([dropId, guestId])
+  @@index([dropId])
+  @@index([email])
+  @@index([checkedInAt])
+}
+
+model LumaCookie {
+  id        String   @id @default(cuid())
+  cookie    String   @db.Text
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  isValid   Boolean  @default(true)
+  
+  @@index([createdAt])
+}

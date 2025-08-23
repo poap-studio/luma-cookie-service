@@ -1,13 +1,13 @@
 const cron = require('node-cron');
 const { LumaCookieExtractor } = require('./cookie-extractor');
-const { VercelUpdater } = require('./vercel-updater');
+const { DatabaseUpdater } = require('./database-updater');
 const logger = require('../utils/logger');
 
 class CookieScheduler {
   constructor(config) {
     this.config = config;
     this.extractor = new LumaCookieExtractor(config.luma);
-    this.updater = new VercelUpdater(config.vercel);
+    this.updater = new DatabaseUpdater();
     this.isRunning = false;
   }
 
@@ -36,14 +36,14 @@ class CookieScheduler {
         throw new Error('Extracted cookie failed validation');
       }
       
-      // 3. Update in Vercel
-      logger.info('Step 3: Updating cookie in Vercel...');
-      await this.updater.updateCookie(cookieData.cookie);
-      logger.info('Vercel updated successfully');
+      // 3. Update in database
+      logger.info('Step 3: Updating cookie in database...');
+      await this.updater.updateCookie(cookieData);
+      logger.info('Database updated successfully');
       
-      // 4. Notify webhook if configured
-      logger.info('Step 4: Sending webhook notification...');
-      await this.updater.notifyWebhook(cookieData, this.config.webhook);
+      // 4. Cleanup old cookies
+      logger.info('Step 4: Cleaning up old cookies...');
+      await this.updater.cleanupOldCookies();
       
       // 5. Log success
       const duration = Date.now() - startTime;
@@ -54,18 +54,11 @@ class CookieScheduler {
       const duration = Date.now() - startTime;
       logger.error(`Cookie update failed after ${duration}ms:`, error);
       
-      // Send error notification if webhook configured
-      if (this.config.webhook?.url) {
-        try {
-          await this.updater.notifyWebhook({
-            status: 'error',
-            error: error.message,
-            timestamp: new Date().toISOString()
-          }, this.config.webhook);
-        } catch (webhookError) {
-          logger.error('Failed to send error webhook:', webhookError.message);
-        }
-      }
+      // Log error details
+      logger.error('Error details:', {
+        message: error.message,
+        stack: error.stack
+      });
       
       throw error;
     } finally {
@@ -82,8 +75,8 @@ class CookieScheduler {
       logger.error('Initial cookie update failed:', error);
     });
     
-    // Schedule to run every 24 hours at 2 AM
-    const schedule = '0 2 * * *';
+    // Schedule to run every 4 hours
+    const schedule = '0 */4 * * *';
     cron.schedule(schedule, () => {
       logger.info('Scheduled cookie update triggered');
       this.updateCookie().catch(error => {
@@ -91,7 +84,7 @@ class CookieScheduler {
       });
     });
     
-    logger.info(`Cookie scheduler started - will run daily at 2 AM (cron: ${schedule})`);
+    logger.info(`Cookie scheduler started - will run every 4 hours (cron: ${schedule})`);
     
     // Also allow manual trigger via process signal
     process.on('SIGUSR2', () => {

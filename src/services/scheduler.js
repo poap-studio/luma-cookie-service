@@ -75,8 +75,8 @@ class CookieScheduler {
       logger.error('Initial cookie update failed:', error);
     });
     
-    // Schedule to run every 4 hours
-    const schedule = '0 */4 * * *';
+    // Schedule to run every day at 3 AM
+    const schedule = '0 3 * * *';
     cron.schedule(schedule, () => {
       logger.info('Scheduled cookie update triggered');
       this.updateCookie().catch(error => {
@@ -84,7 +84,7 @@ class CookieScheduler {
       });
     });
     
-    logger.info(`Cookie scheduler started - will run every 4 hours (cron: ${schedule})`);
+    logger.info(`Cookie scheduler started - will run daily at 3 AM (cron: ${schedule})`);
     
     // Also allow manual trigger via process signal
     process.on('SIGUSR2', () => {

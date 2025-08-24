@@ -1,5 +1,6 @@
 const dotenv = require('dotenv');
 const { CookieScheduler } = require('./services/scheduler');
+const { DropScheduler } = require('./services/drop-scheduler');
 const logger = require('./utils/logger');
 
 // Load environment variables
@@ -17,9 +18,13 @@ async function main() {
       }
     };
 
-    // Start the scheduler
-    const scheduler = new CookieScheduler(config);
-    scheduler.start();
+    // Start the cookie scheduler
+    const cookieScheduler = new CookieScheduler(config);
+    cookieScheduler.start();
+    
+    // Start the drop processor scheduler
+    const dropScheduler = new DropScheduler();
+    dropScheduler.start();
     
     logger.info('Luma Cookie Service started successfully');
     

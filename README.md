@@ -1,6 +1,10 @@
 # Luma Cookie Service
 
-Automated service that maintains fresh Luma authentication cookies for the POAP platform. It periodically extracts cookies from Luma using Puppeteer and saves them directly to the database every 4 hours.
+Automated service that maintains fresh Luma authentication cookies and processes POAP drops for Luma events. 
+
+## Features
+1. **Cookie Management**: Extracts and maintains fresh Luma authentication cookies daily
+2. **Drop Processing**: Automatically processes POAP drops for completed Luma events every minute
 
 ## AWS Infrastructure
 
@@ -46,19 +50,34 @@ aws ec2 stop-instances --instance-ids i-076d10cf43e69a854
 aws ec2 start-instances --instance-ids i-076d10cf43e69a854
 ```
 
-## Features
+## Key Features
 
+### Cookie Management
 1. **Cookie Extraction**: Uses Puppeteer to login to Luma and extract the `luma.auth-session-key` cookie
 2. **Cookie Validation**: Tests extracted cookies before saving
 3. **Database Update**: Saves the cookie directly to the PostgreSQL database
 4. **Cleanup**: Removes old and invalid cookies from the database
 5. **Automatic Login**: Handles the two-step login process (email, then password)
 
+### Drop Processing
+1. **Event Monitoring**: Checks Luma events every minute for completion
+2. **Guest Verification**: Identifies checked-in guests for completed events
+3. **POAP Availability**: Verifies sufficient POAPs are available before processing
+4. **Email Delivery**: Sends POAPs via email with customizable templates
+5. **Address Delivery**: Delivers POAPs directly to Ethereum addresses
+
 ## Operation
 
-- Runs automatically every 4 hours
+### Cookie Updates
+- Runs automatically every day at 3 AM
 - Manual trigger via PM2: `pm2 trigger luma-cookie-service update`
 - Automatic cleanup of cookies older than 30 days
+
+### Drop Processing
+- Runs automatically every minute
+- Processes only completed Luma events
+- Skips if insufficient POAPs are available
+- Manual trigger: Send SIGUSR1 signal to process
 
 ## Installation
 
@@ -80,6 +99,16 @@ DATABASE_URL=postgresql://user:password@host:port/database
 
 # PM2 Process Name (Optional)
 PM2_NAME=luma-cookie-service
+
+# SMTP Configuration (for email delivery)
+SMTP_USER=your-email@gmail.com
+SMTP_PASS=your-app-password
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_FROM=Your Name <your-email@gmail.com>
+
+# POAP API Configuration
+POAP_API_KEY=your-poap-api-key
 ```
 
 ### Database Setup

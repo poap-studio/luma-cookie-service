@@ -1,6 +1,7 @@
 const { PrismaClient } = require('@prisma/client');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
+const { getPOAPAuthManager } = require('../lib/poap-auth');
 const logger = require('../utils/logger');
 
 class DropProcessor {
@@ -21,6 +22,14 @@ class DropProcessor {
         }
       });
     }
+    
+    // POAP Auth Manager
+    try {
+      this.authManager = getPOAPAuthManager();
+    } catch (error) {
+      logger.error('Failed to initialize POAP auth manager:', error.message);
+      this.authManager = null;
+    }
   }
 
   async processDrops() {
@@ -35,9 +44,14 @@ class DropProcessor {
     try {
       logger.info('Starting drop processing...');
 
-      // Check if POAP API key is configured
+      // Check if POAP API is configured
       if (!process.env.POAP_API_KEY || process.env.POAP_API_KEY === 'placeholder_api_key') {
         logger.warn('POAP API key not configured, skipping drop processing');
+        return;
+      }
+      
+      if (!this.authManager) {
+        logger.warn('POAP OAuth not configured, skipping drop processing');
         return;
       }
 
@@ -187,10 +201,16 @@ class DropProcessor {
 
   async getAvailablePoaps(eventId, secretCode) {
     try {
-      const response = await axios.post(
+      if (!this.authManager) {
+        logger.error('POAP auth manager not initialized');
+        return 0;
+      }
+
+      const response = await this.authManager.makeAuthenticatedRequest(
         `https://api.poap.tech/event/${eventId}/qr-codes`,
-        { secret_code: secretCode },
         {
+          method: 'POST',
+          data: { secret_code: secretCode },
           headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -270,15 +290,20 @@ class DropProcessor {
 
     // Claim the POAP to the address
     try {
-      const response = await axios.post(
+      if (!this.authManager) {
+        throw new Error('POAP auth manager not initialized');
+      }
+
+      const response = await this.authManager.makeAuthenticatedRequest(
         'https://api.poap.tech/actions/claim-qr',
         {
-          address: guest.ethAddress,
-          qr_hash: qrCode.qr_hash,
-          secret: qrCode.secret,
-          sendEmail: false
-        },
-        {
+          method: 'POST',
+          data: {
+            address: guest.ethAddress,
+            qr_hash: qrCode.qr_hash,
+            secret: qrCode.secret,
+            sendEmail: false
+          },
           headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -309,10 +334,16 @@ class DropProcessor {
 
   async getMintLink(eventId, secretCode) {
     try {
-      const response = await axios.post(
+      if (!this.authManager) {
+        logger.error('POAP auth manager not initialized');
+        return null;
+      }
+
+      const response = await this.authManager.makeAuthenticatedRequest(
         `https://api.poap.tech/event/${eventId}/qr-codes`,
-        { secret_code: secretCode },
         {
+          method: 'POST',
+          data: { secret_code: secretCode },
           headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -339,10 +370,16 @@ class DropProcessor {
 
   async getAvailableQrCode(eventId, secretCode) {
     try {
-      const response = await axios.post(
+      if (!this.authManager) {
+        logger.error('POAP auth manager not initialized');
+        return null;
+      }
+
+      const response = await this.authManager.makeAuthenticatedRequest(
         `https://api.poap.tech/event/${eventId}/qr-codes`,
-        { secret_code: secretCode },
         {
+          method: 'POST',
+          data: { secret_code: secretCode },
           headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',

@@ -21,6 +21,7 @@ class LumaCookieExtractor {
         
         const browser = await puppeteer.launch({
           headless: 'new',
+          executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -76,7 +77,18 @@ class LumaCookieExtractor {
           
           // Wait for navigation to complete
           logger.info('Waiting for login to complete...');
-          await this.delay(5000);
+          
+          // Wait for navigation away from signin page
+          try {
+            await page.waitForFunction(
+              () => !window.location.href.includes('/signin'),
+              { timeout: 15000 }
+            );
+          } catch (e) {
+            logger.warn('Navigation timeout - checking cookies anyway');
+          }
+          
+          await this.delay(2000);
           
           // Get current URL to verify login
           const currentUrl = page.url();
@@ -86,14 +98,44 @@ class LumaCookieExtractor {
           const cookies = await page.cookies();
           logger.info(`Found ${cookies.length} cookies`);
           
-          // Find the auth session cookie
-          const sessionCookie = cookies.find(cookie => 
-            cookie.name === 'luma.auth-session-key'
+          // Log all cookie names for debugging
+          cookies.forEach(cookie => {
+            logger.info(`Cookie found: ${cookie.name} (domain: ${cookie.domain})`);
+          });
+          
+          // Look for the luma-specific cookie
+          let sessionCookie = cookies.find(cookie => 
+            cookie.domain === '.lu.ma' && cookie.value && cookie.value.length > 20
           );
+          
+          if (!sessionCookie) {
+            // Try different possible cookie names
+            const possibleNames = ['luma.auth-session-key', 'auth-session-key', '__Secure-next-auth.session-token', 'next-auth.session-token'];
+            
+            for (const name of possibleNames) {
+              sessionCookie = cookies.find(cookie => cookie.name === name);
+              if (sessionCookie) {
+                logger.info(`Found session cookie with name: ${name}`);
+                break;
+              }
+            }
+          }
+          
+          // If no specific cookie found, look for any cookie with 'session' or 'auth' in the name
+          if (!sessionCookie) {
+            sessionCookie = cookies.find(cookie => 
+              (cookie.name.toLowerCase().includes('session') || 
+               cookie.name.toLowerCase().includes('auth')) &&
+              cookie.value && cookie.value.length > 20
+            );
+            if (sessionCookie) {
+              logger.info(`Found potential session cookie: ${sessionCookie.name}`);
+            }
+          }
           
           if (sessionCookie) {
             const cookieString = `${sessionCookie.name}=${sessionCookie.value}`;
-            logger.info('Successfully extracted luma.auth-session-key');
+            logger.info(`Successfully extracted cookie: ${sessionCookie.name}`);
             
             await browser.close();
             return {
@@ -102,7 +144,7 @@ class LumaCookieExtractor {
               obtainedAt: new Date()
             };
           } else {
-            throw new Error('Could not find luma.auth-session-key cookie');
+            throw new Error('Could not find session cookie. Available cookies: ' + cookies.map(c => c.name).join(', '));
           }
           
         } finally {
@@ -112,6 +154,7 @@ class LumaCookieExtractor {
       } catch (error) {
         retries++;
         logger.error(`Attempt ${retries} failed:`, error.message);
+        logger.error(`Full error:`, error);
         
         if (retries < this.maxRetries) {
           logger.info(`Waiting 5 seconds before retry...`);

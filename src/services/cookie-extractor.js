@@ -70,13 +70,37 @@ class LumaCookieExtractor {
             // Wait a bit before submitting
             await this.delay(1000);
             
-            // Submit password
+            // Submit password - look for the Continue button
             logger.info('Submitting login form...');
-            const submitButton = await page.$('button[type="submit"]');
-            if (submitButton) {
-              await submitButton.click();
-            } else {
-              // Try pressing Enter
+            
+            // Try multiple selectors for the submit button
+            const buttonSelectors = [
+              'button',
+              'button[type="submit"]',
+              'button.primary'
+            ];
+            
+            let clicked = false;
+            for (const selector of buttonSelectors) {
+              try {
+                const button = await page.$(selector);
+                if (button) {
+                  const text = await button.evaluate(el => el.textContent);
+                  if (text && text.toLowerCase().includes('continue')) {
+                    logger.info(`Clicking button with text: ${text}`);
+                    await button.click();
+                    clicked = true;
+                    break;
+                  }
+                }
+              } catch (e) {
+                // Continue trying other selectors
+              }
+            }
+            
+            if (!clicked) {
+              // If no button found, try pressing Enter
+              logger.info('No Continue button found, pressing Enter');
               await page.keyboard.press('Enter');
             }
             

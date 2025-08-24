@@ -67,9 +67,18 @@ class LumaCookieExtractor {
             logger.info('Entering password...');
             await page.type('input[type="password"]', this.password, { delay: 100 });
             
+            // Wait a bit before submitting
+            await this.delay(1000);
+            
             // Submit password
             logger.info('Submitting login form...');
-            await page.click('button[type="submit"]');
+            const submitButton = await page.$('button[type="submit"]');
+            if (submitButton) {
+              await submitButton.click();
+            } else {
+              // Try pressing Enter
+              await page.keyboard.press('Enter');
+            }
             
           } catch (e) {
             logger.warn('No password field found, might be using different auth method');
@@ -86,6 +95,13 @@ class LumaCookieExtractor {
             );
           } catch (e) {
             logger.warn('Navigation timeout - checking cookies anyway');
+            // Take a screenshot for debugging
+            try {
+              await page.screenshot({ path: '/tmp/luma-login-debug.png' });
+              logger.info('Debug screenshot saved to /tmp/luma-login-debug.png');
+            } catch (screenshotError) {
+              logger.error('Failed to take screenshot:', screenshotError.message);
+            }
           }
           
           await this.delay(2000);
@@ -103,14 +119,31 @@ class LumaCookieExtractor {
             logger.info(`Cookie found: ${cookie.name} (domain: ${cookie.domain})`);
           });
           
-          // Look for the luma-specific cookie
-          let sessionCookie = cookies.find(cookie => 
-            cookie.domain === '.lu.ma' && cookie.value && cookie.value.length > 20
-          );
+          // Look for cookies that might be the session cookie
+          // Luma might use a different cookie name now
+          let sessionCookie = null;
+          
+          // First, try to find any cookie that looks like a JWT or session token
+          sessionCookie = cookies.find(cookie => {
+            // JWT tokens typically start with 'ey' and are long
+            if (cookie.value && (cookie.value.startsWith('ey') || cookie.value.length > 100)) {
+              logger.info(`Found potential JWT/session cookie: ${cookie.name}`);
+              return true;
+            }
+            return false;
+          });
           
           if (!sessionCookie) {
-            // Try different possible cookie names
-            const possibleNames = ['luma.auth-session-key', 'auth-session-key', '__Secure-next-auth.session-token', 'next-auth.session-token'];
+            // Try specific cookie names
+            const possibleNames = [
+              'luma.auth-session-key', 
+              'auth-session-key', 
+              '__Secure-next-auth.session-token', 
+              'next-auth.session-token',
+              'luma-auth-token',
+              'session',
+              'auth-token'
+            ];
             
             for (const name of possibleNames) {
               sessionCookie = cookies.find(cookie => cookie.name === name);
@@ -121,15 +154,17 @@ class LumaCookieExtractor {
             }
           }
           
-          // If no specific cookie found, look for any cookie with 'session' or 'auth' in the name
-          if (!sessionCookie) {
-            sessionCookie = cookies.find(cookie => 
-              (cookie.name.toLowerCase().includes('session') || 
-               cookie.name.toLowerCase().includes('auth')) &&
-              cookie.value && cookie.value.length > 20
-            );
+          // If still no cookie, check if we're actually logged in by looking at the URL
+          if (!sessionCookie && currentUrl && !currentUrl.includes('/signin')) {
+            // We might be logged in but the cookie name is different
+            // Use the longest cookie value as it's likely the session
+            sessionCookie = cookies.reduce((prev, current) => {
+              if (!prev) return current;
+              return current.value.length > prev.value.length ? current : prev;
+            }, null);
+            
             if (sessionCookie) {
-              logger.info(`Found potential session cookie: ${sessionCookie.name}`);
+              logger.info(`Using longest cookie as session: ${sessionCookie.name} (${sessionCookie.value.length} chars)`);
             }
           }
           

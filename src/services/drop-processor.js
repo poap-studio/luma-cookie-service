@@ -165,6 +165,25 @@ class DropProcessor {
       }
 
       logger.info(`Delivered POAPs to ${deliveredCount} guests`);
+      
+      // Check if all checked-in guests have been delivered
+      const allDelivered = checkedInGuests.every(guest => 
+        drop.lumaDeliveries.some(delivery => delivery.guestId === guest.guestId) ||
+        undeliveredGuests.find(u => u.guestId === guest.guestId) // newly delivered
+      );
+      
+      if (allDelivered && deliveredCount > 0) {
+        // Mark drop as fully delivered
+        await this.prisma.drop.update({
+          where: { id: drop.id },
+          data: {
+            poapsDelivered: true,
+            deliveredAt: new Date()
+          }
+        });
+        logger.info(`Drop ${drop.id} marked as fully delivered`);
+      }
+      
       return deliveredCount > 0;
 
     } catch (error) {

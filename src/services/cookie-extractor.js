@@ -104,6 +104,20 @@ class LumaCookieExtractor {
               await page.keyboard.press('Enter');
             }
             
+            // Wait for potential error messages or navigation
+            await this.delay(3000);
+            
+            // Check for error messages
+            try {
+              const errorElement = await page.$('[role="alert"], .error, .error-message, [class*="error"]');
+              if (errorElement) {
+                const errorText = await errorElement.evaluate(el => el.textContent);
+                logger.error(`Login error detected: ${errorText}`);
+              }
+            } catch (e) {
+              // No error element found
+            }
+            
           } catch (e) {
             logger.warn('No password field found, might be using different auth method');
           }
@@ -111,18 +125,38 @@ class LumaCookieExtractor {
           // Wait for navigation to complete
           logger.info('Waiting for login to complete...');
           
-          // Wait for navigation away from signin page
+          // Wait for navigation away from signin page or for session cookie to appear
           try {
-            await page.waitForFunction(
-              () => !window.location.href.includes('/signin'),
-              { timeout: 15000 }
-            );
+            await Promise.race([
+              page.waitForFunction(
+                () => !window.location.href.includes('/signin'),
+                { timeout: 20000 }
+              ),
+              page.waitForFunction(
+                () => {
+                  const cookies = document.cookie.split(';');
+                  return cookies.some(c => 
+                    c.includes('auth') || 
+                    c.includes('session') || 
+                    c.includes('token')
+                  );
+                },
+                { timeout: 20000 }
+              )
+            ]);
+            logger.info('Login appears successful');
           } catch (e) {
             logger.warn('Navigation timeout - checking cookies anyway');
             // Take a screenshot for debugging
             try {
-              await page.screenshot({ path: '/tmp/luma-login-debug.png' });
+              await page.screenshot({ path: '/tmp/luma-login-debug.png', fullPage: true });
               logger.info('Debug screenshot saved to /tmp/luma-login-debug.png');
+              
+              // Also log the page content for debugging
+              const pageContent = await page.content();
+              if (pageContent.includes('incorrect') || pageContent.includes('invalid')) {
+                logger.error('Page contains error keywords - login may have failed');
+              }
             } catch (screenshotError) {
               logger.error('Failed to take screenshot:', screenshotError.message);
             }
@@ -134,13 +168,21 @@ class LumaCookieExtractor {
           const currentUrl = page.url();
           logger.info(`Current URL after login: ${currentUrl}`);
           
-          // Get all cookies
-          const cookies = await page.cookies();
-          logger.info(`Found ${cookies.length} cookies`);
+          // Get all cookies from all domains
+          const client = await page.target().createCDPSession();
+          const { cookies: allCookies } = await client.send('Network.getAllCookies');
+          
+          // Filter cookies related to luma
+          const cookies = allCookies.filter(cookie => 
+            cookie.domain.includes('lu.ma') || 
+            cookie.domain.includes('luma')
+          );
+          
+          logger.info(`Found ${cookies.length} Luma-related cookies (${allCookies.length} total)`);
           
           // Log all cookie names for debugging
           cookies.forEach(cookie => {
-            logger.info(`Cookie found: ${cookie.name} (domain: ${cookie.domain})`);
+            logger.info(`Cookie found: ${cookie.name} (domain: ${cookie.domain}, ${cookie.value.length} chars)`);
           });
           
           // Look for cookies that might be the session cookie

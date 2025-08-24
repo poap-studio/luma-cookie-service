@@ -144,6 +144,19 @@ class DropProcessor {
 
       if (undeliveredGuests.length === 0) {
         logger.info(`All guests already have POAPs delivered`);
+        
+        // Check if drop needs to be marked as delivered
+        if (!drop.poapsDelivered && checkedInGuests.length > 0) {
+          await this.prisma.drop.update({
+            where: { id: drop.id },
+            data: {
+              poapsDelivered: true,
+              deliveredAt: new Date()
+            }
+          });
+          logger.info(`Drop ${drop.id} marked as fully delivered (all guests already had POAPs)`);
+        }
+        
         return false;
       }
 

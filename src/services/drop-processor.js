@@ -121,6 +121,9 @@ class DropProcessor {
         return false;
       }
 
+      // Store event name for later use in email
+      const eventName = eventDetails.event?.name || drop.lumaEventUrl || 'the event';
+
       // 2. Get checked-in guests
       const checkedInGuests = drop.lumaGuests.filter(guest => guest.checkedInAt !== null);
       logger.info(`Found ${checkedInGuests.length} checked-in guests`);
@@ -164,7 +167,7 @@ class DropProcessor {
       for (const guest of undeliveredGuests) {
         try {
           if (drop.deliveryTarget === 'email') {
-            await this.deliverPoapByEmail(drop, guest);
+            await this.deliverPoapByEmail(drop, guest, eventName);
             deliveredCount++;
           } else if (drop.deliveryTarget === 'address' || drop.deliveryTarget === 'ethereum') {
             await this.deliverPoapToAddress(drop, guest);
@@ -260,7 +263,7 @@ class DropProcessor {
     }
   }
 
-  async deliverPoapByEmail(drop, guest) {
+  async deliverPoapByEmail(drop, guest, eventName) {
     logger.info(`Delivering POAP by email to ${guest.email}`);
 
     // 1. Get mint link
@@ -275,12 +278,19 @@ class DropProcessor {
       .replace(/{{name}}/g, guest.name)
       .replace(/{{firstName}}/g, guest.firstName || guest.name)
       .replace(/{{mintLink}}/g, mintLink)
-      .replace(/{{eventName}}/g, drop.lumaEventUrl || 'the event');
+      .replace(/{{poapLink}}/g, mintLink)  // Support both {{mintLink}} and {{poapLink}}
+      .replace(/{{eventName}}/g, eventName);
+
+    // Also replace variables in subject
+    const processedSubject = (drop.emailSubject || 'Your POAP is ready!')
+      .replace(/{{eventName}}/g, eventName)
+      .replace(/{{name}}/g, guest.name)
+      .replace(/{{firstName}}/g, guest.firstName || guest.name);
 
     const mailOptions = {
       from: process.env.SMTP_FROM || `${process.env.SMTP_USER}`,
       to: guest.email,
-      subject: drop.emailSubject || 'Your POAP is ready!',
+      subject: processedSubject,
       html: processedBody
     };
 

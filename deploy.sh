@@ -17,7 +17,7 @@ if [ -z "$SSH_KEY_PATH" ]; then
 fi
 
 # EC2 Instance details
-EC2_IP="54.147.7.9"
+EC2_IP="54.226.204.33"
 EC2_USER="ubuntu"
 SERVICE_DIR="/home/ubuntu/luma-cookie-service"
 

@@ -19,9 +19,8 @@ class LumaCookieExtractor {
       try {
         logger.info(`Attempting to extract cookie (attempt ${retries + 1}/${this.maxRetries})`);
         
-        const browser = await puppeteer.launch({
-          headless: 'new',
-          executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome',
+        const launchOptions = {
+          headless: process.env.NODE_ENV === 'production' ? 'new' : false,
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -32,7 +31,14 @@ class LumaCookieExtractor {
             '--single-process',
             '--disable-gpu'
           ]
-        });
+        };
+        
+        // Only set executablePath in production (Linux)
+        if (process.env.NODE_ENV === 'production' || process.platform === 'linux') {
+          launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome';
+        }
+        
+        const browser = await puppeteer.launch(launchOptions);
         
         const page = await browser.newPage();
         
@@ -47,25 +53,76 @@ class LumaCookieExtractor {
             timeout: 30000 
           });
           
-          // Enter email
-          logger.info('Entering email...');
-          await page.waitForSelector('input[type="email"]', { visible: true });
-          await page.type('input[type="email"]', this.email, { delay: 100 });
+          // Check what's currently on the page
+          const emailField = await page.$('input[type="email"]');
+          const passwordField = await page.$('input[type="password"]');
           
-          // Click continue
-          logger.info('Submitting email...');
-          await page.click('button[type="submit"]');
+          // Check if email field is visible
+          if (emailField && await emailField.isIntersectingViewport()) {
+            // Email field is visible, enter email
+            logger.info('Email field detected, entering email...');
+            await emailField.click();
+            await emailField.type('', { delay: 10 }); // Clear any existing content
+            await page.keyboard.down('Control');
+            await page.keyboard.press('A');
+            await page.keyboard.up('Control');
+            await page.keyboard.press('Backspace');
+            await emailField.type(this.email, { delay: 100 });
+            
+            // Submit email
+            logger.info('Submitting email...');
+            await page.click('button[type="submit"]');
+            
+            // Wait for password field
+            await this.delay(3000);
+          }
           
-          // Wait for password field or navigation
-          await this.delay(3000);
-          
-          // Enter password if field is present
+          // Now handle password - but only if password field is visible
           try {
             logger.info('Looking for password field...');
-            await page.waitForSelector('input[type="password"]', { visible: true, timeout: 5000 });
+            const passwordFieldAfter = await page.waitForSelector('input[type="password"]', { visible: true, timeout: 5000 });
+            
+            // IMPORTANT: Check if email field is still visible
+            // If it is, we're still on email step, not password step
+            const emailFieldStillVisible = await page.$('input[type="email"]');
+            if (emailFieldStillVisible && await emailFieldStillVisible.isIntersectingViewport()) {
+              logger.error('Email field is still visible - we are not on password step yet!');
+              throw new Error('Login flow did not progress to password step');
+            }
+            
+            // Clear the field completely before typing
+            logger.info('Clearing password field...');
+            await passwordFieldAfter.click();
+            await passwordFieldAfter.focus();
+            
+            // Use keyboard shortcuts to select all and delete
+            await page.keyboard.down('Control');
+            await page.keyboard.press('A');
+            await page.keyboard.up('Control');
+            await page.keyboard.press('Delete');
+            
+            // Also try triple click and backspace as backup
+            await passwordFieldAfter.click({ clickCount: 3 });
+            await page.keyboard.press('Backspace');
+            
+            // Verify field is empty
+            const fieldValue = await passwordFieldAfter.evaluate(el => el.value);
+            if (fieldValue && fieldValue.length > 0) {
+              logger.warn(`Field still has content: ${fieldValue.length} chars`);
+              // Try one more time to clear
+              await passwordFieldAfter.evaluate(el => el.value = '');
+            }
             
             logger.info('Entering password...');
-            await page.type('input[type="password"]', this.password, { delay: 100 });
+            await passwordFieldAfter.type(this.password, { delay: 100 });
+            
+            // Take screenshot after entering password
+            try {
+              await page.screenshot({ path: '/tmp/luma-password-entered.png', fullPage: true });
+              logger.info('Screenshot saved after entering password');
+            } catch (e) {
+              // Ignore screenshot errors
+            }
             
             // Wait a bit before submitting
             await this.delay(1000);
@@ -149,14 +206,19 @@ class LumaCookieExtractor {
             logger.warn('Navigation timeout - checking cookies anyway');
             // Take a screenshot for debugging
             try {
-              await page.screenshot({ path: '/tmp/luma-login-debug.png', fullPage: true });
-              logger.info('Debug screenshot saved to /tmp/luma-login-debug.png');
+              const timestamp = Date.now();
+              await page.screenshot({ path: `/tmp/luma-login-final-${timestamp}.png`, fullPage: true });
+              logger.info(`Final screenshot saved to /tmp/luma-login-final-${timestamp}.png`);
               
               // Also log the page content for debugging
               const pageContent = await page.content();
               if (pageContent.includes('incorrect') || pageContent.includes('invalid')) {
                 logger.error('Page contains error keywords - login may have failed');
               }
+              
+              // Log current URL
+              const finalUrl = page.url();
+              logger.info(`Final URL: ${finalUrl}`);
             } catch (screenshotError) {
               logger.error('Failed to take screenshot:', screenshotError.message);
             }
@@ -189,35 +251,43 @@ class LumaCookieExtractor {
           // Luma might use a different cookie name now
           let sessionCookie = null;
           
-          // First, try to find any cookie that looks like a JWT or session token
-          sessionCookie = cookies.find(cookie => {
-            // JWT tokens typically start with 'ey' and are long
-            if (cookie.value && (cookie.value.startsWith('ey') || cookie.value.length > 100)) {
-              logger.info(`Found potential JWT/session cookie: ${cookie.name}`);
-              return true;
+          // First priority: try specific cookie names we know Luma uses
+          const possibleNames = [
+            'luma.auth-session-key', 
+            'auth-session-key', 
+            '__Secure-next-auth.session-token', 
+            'next-auth.session-token',
+            'luma-auth-token',
+            'session',
+            'auth-token'
+          ];
+          
+          for (const name of possibleNames) {
+            sessionCookie = cookies.find(cookie => cookie.name === name);
+            if (sessionCookie) {
+              logger.info(`Found session cookie with name: ${name}`);
+              break;
             }
-            return false;
-          });
+          }
           
           if (!sessionCookie) {
-            // Try specific cookie names
-            const possibleNames = [
-              'luma.auth-session-key', 
-              'auth-session-key', 
-              '__Secure-next-auth.session-token', 
-              'next-auth.session-token',
-              'luma-auth-token',
-              'session',
-              'auth-token'
-            ];
-            
-            for (const name of possibleNames) {
-              sessionCookie = cookies.find(cookie => cookie.name === name);
-              if (sessionCookie) {
-                logger.info(`Found session cookie with name: ${name}`);
-                break;
+            // If no specific name found, look for JWT-like tokens
+            // but exclude common non-session cookies like __cf_bm
+            sessionCookie = cookies.find(cookie => {
+              // Skip known non-session cookies
+              if (cookie.name.startsWith('__cf_') || 
+                  cookie.name === 'luma.did' || 
+                  cookie.name === 'luma.first-page') {
+                return false;
               }
-            }
+              
+              // JWT tokens typically start with 'ey' and are long
+              if (cookie.value && (cookie.value.startsWith('ey') || cookie.value.length > 100)) {
+                logger.info(`Found potential JWT/session cookie: ${cookie.name}`);
+                return true;
+              }
+              return false;
+            });
           }
           
           // If still no cookie, check if we're actually logged in by looking at the URL

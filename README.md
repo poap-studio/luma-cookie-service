@@ -5,8 +5,8 @@ Automated service that maintains fresh Luma authentication cookies for the POAP 
 ## AWS Infrastructure
 
 ### EC2 Instance Details
-- **Instance ID**: `i-080272c5028db9c74`
-- **Public IP**: `54.147.7.9`
+- **Instance ID**: `i-076d10cf43e69a854`
+- **Public IP**: `54.226.204.33`
 - **Region**: `us-east-1`
 - **Instance Type**: `t2.micro`
 - **Security Group**: `sg-03cad80bf001c61f1` (luma-cookie-service-sg)
@@ -27,7 +27,7 @@ Automated service that maintains fresh Luma authentication cookies for the POAP 
 ```bash
 # Download the PEM from 1Password and save it as luma-cookie-service.pem
 chmod 600 luma-cookie-service.pem
-ssh -i luma-cookie-service.pem ubuntu@54.147.7.9
+ssh -i luma-cookie-service.pem ubuntu@54.226.204.33
 ```
 
 ### AWS CLI Configuration
@@ -41,17 +41,18 @@ export AWS_SECRET_ACCESS_KEY="<from-1password>"
 export AWS_DEFAULT_REGION="us-east-1"
 
 # Manage instance
-aws ec2 describe-instances --instance-ids i-080272c5028db9c74
-aws ec2 stop-instances --instance-ids i-080272c5028db9c74
-aws ec2 start-instances --instance-ids i-080272c5028db9c74
+aws ec2 describe-instances --instance-ids i-076d10cf43e69a854
+aws ec2 stop-instances --instance-ids i-076d10cf43e69a854
+aws ec2 start-instances --instance-ids i-076d10cf43e69a854
 ```
 
 ## Features
 
-1. **Cookie Extraction**: Uses Puppeteer to login to Luma and extract session cookies
+1. **Cookie Extraction**: Uses Puppeteer to login to Luma and extract the `luma.auth-session-key` cookie
 2. **Cookie Validation**: Tests extracted cookies before saving
 3. **Database Update**: Saves the cookie directly to the PostgreSQL database
 4. **Cleanup**: Removes old and invalid cookies from the database
+5. **Automatic Login**: Handles the two-step login process (email, then password)
 
 ## Operation
 
@@ -99,7 +100,7 @@ pm2 startup
 ### Check Status
 ```bash
 # SSH into the server
-ssh -i luma-cookie-service.pem ubuntu@54.147.7.9
+ssh -i luma-cookie-service.pem ubuntu@54.226.204.33
 
 # Check service status
 pm2 status
@@ -124,7 +125,7 @@ pm2 logs luma-cookie-service
 ### Update Deployment
 ```bash
 # On the EC2 instance
-ssh -i luma-cookie-service.pem ubuntu@54.147.7.9
+ssh -i luma-cookie-service.pem ubuntu@54.226.204.33
 cd /home/ubuntu/luma-cookie-service
 git pull
 npm install
@@ -166,6 +167,14 @@ pm2 restart luma-cookie-service
 - Check Luma credentials in `.env`
 - Review logs for specific errors: `pm2 logs luma-cookie-service`
 - Ensure Chrome/Chromium is properly installed
+- If login is failing, check `/tmp/luma-password-entered.png` for debugging
+
+### Manual Cookie Update
+If automatic extraction fails, you can manually update the cookie:
+```bash
+# Get cookie from browser DevTools (see MANUAL_COOKIE_INSTRUCTIONS.md)
+node manual-cookie-update.js "luma.auth-session-key=your-cookie-value"
+```
 
 ### Service doesn't start
 - Check PM2 status: `pm2 status`
@@ -185,13 +194,13 @@ pm2 restart luma-cookie-service
 tar -czf luma-service-backup.tar.gz /home/ubuntu/luma-cookie-service/.env
 
 # Download to local
-scp -i luma-cookie-service.pem ubuntu@54.147.7.9:~/luma-service-backup.tar.gz .
+scp -i luma-cookie-service.pem ubuntu@54.226.204.33:~/luma-service-backup.tar.gz .
 ```
 
 ### Create AMI for disaster recovery
 ```bash
 aws ec2 create-image \
-  --instance-id i-080272c5028db9c74 \
+  --instance-id i-076d10cf43e69a854 \
   --name "luma-cookie-service-$(date +%Y%m%d)" \
   --description "Backup of Luma Cookie Service"
 ```

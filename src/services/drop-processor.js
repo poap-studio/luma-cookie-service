@@ -324,26 +324,60 @@ class DropProcessor {
 
     logger.info(`Delivering POAP to address ${guest.ethAddress}`);
 
-    // Get an available QR code
-    const qrCode = await this.getAvailableQrCode(drop.poapEventId, drop.poapSecretCode);
-    if (!qrCode) {
-      throw new Error('No available QR codes');
-    }
-
-    // Claim the POAP to the address
     try {
       if (!this.authManager) {
         throw new Error('POAP auth manager not initialized');
       }
 
-      const response = await this.authManager.makeAuthenticatedRequest(
-        'https://api.poap.tech/actions/claim-qr',
+      // Step 1: Get available QR hashes
+      logger.info(`[POAP Delivery] Step 1: Getting available QR hashes...`);
+      const qrHashesResponse = await this.authManager.makeAuthenticatedRequest(
+        `https://api.poap.tech/event/${drop.poapEventId}/qr-codes`,
+        {
+          method: 'POST',
+          data: { secret_code: drop.poapSecretCode },
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-API-Key': process.env.POAP_API_KEY
+          }
+        }
+      );
+
+      const qrCodes = qrHashesResponse.data;
+      const availableQr = qrCodes.find(qr => !qr.claimed);
+
+      if (!availableQr) {
+        throw new Error('No available QR codes');
+      }
+
+      logger.info(`[POAP Delivery] Using QR hash: ${availableQr.qr_hash}`);
+
+      // Step 2: Get the secret for this QR hash
+      logger.info(`[POAP Delivery] Step 2: Getting QR secret...`);
+      const secretResponse = await this.authManager.makeAuthenticatedRequest(
+        `https://api.poap.tech/actions/claim-qr?qr_hash=${availableQr.qr_hash}`,
+        {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'X-API-Key': process.env.POAP_API_KEY
+          }
+        }
+      );
+
+      const qrSecret = secretResponse.data.secret;
+      logger.info(`[POAP Delivery] Got QR secret`);
+
+      // Step 3: Claim the POAP with the secret
+      logger.info(`[POAP Delivery] Step 3: Claiming POAP...`);
+      const claimResponse = await this.authManager.makeAuthenticatedRequest(
+        `https://api.poap.tech/event/${drop.poapEventId}/qr-codes`,
         {
           method: 'POST',
           data: {
+            secret_code: qrSecret,
             address: guest.ethAddress,
-            qr_hash: qrCode.qr_hash,
-            secret: qrCode.secret,
             sendEmail: false
           },
           headers: {
@@ -410,34 +444,6 @@ class DropProcessor {
     }
   }
 
-  async getAvailableQrCode(eventId, secretCode) {
-    try {
-      if (!this.authManager) {
-        logger.error('POAP auth manager not initialized');
-        return null;
-      }
-
-      const response = await this.authManager.makeAuthenticatedRequest(
-        `https://api.poap.tech/event/${eventId}/qr-codes`,
-        {
-          method: 'POST',
-          data: { secret_code: secretCode },
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-API-Key': process.env.POAP_API_KEY
-          }
-        }
-      );
-
-      const qrCodes = response.data;
-      return qrCodes.find(qr => !qr.claimed);
-
-    } catch (error) {
-      logger.error(`Error getting QR code:`, error.message);
-      return null;
-    }
-  }
 
   getDefaultEmailBody() {
     return `

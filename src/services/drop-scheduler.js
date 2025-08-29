@@ -1,11 +1,14 @@
 const cron = require('node-cron');
 const { DropProcessor } = require('./drop-processor');
+const { RealTimeProcessor } = require('./real-time-processor');
 const logger = require('../utils/logger');
 
 class DropScheduler {
   constructor() {
     this.processor = new DropProcessor();
+    this.realTimeProcessor = new RealTimeProcessor();
     this.isRunning = false;
+    this.isRealTimeRunning = false;
   }
 
   async processDrops() {
@@ -25,6 +28,23 @@ class DropScheduler {
     }
   }
 
+  async processRealTimeDrops() {
+    if (this.isRealTimeRunning) {
+      logger.warn('Real-time processing already in progress, skipping...');
+      return;
+    }
+
+    this.isRealTimeRunning = true;
+    
+    try {
+      await this.realTimeProcessor.processRealTimeDrops();
+    } catch (error) {
+      logger.error('Real-time processing failed:', error);
+    } finally {
+      this.isRealTimeRunning = false;
+    }
+  }
+
   start() {
     logger.info('Starting Drop Scheduler...');
     
@@ -34,7 +54,13 @@ class DropScheduler {
       logger.error('Initial drop processing failed:', error);
     });
     
-    // Schedule to run every minute
+    // Run real-time processing immediately on startup
+    logger.info('Running initial real-time processing...');
+    this.processRealTimeDrops().catch(error => {
+      logger.error('Initial real-time processing failed:', error);
+    });
+    
+    // Schedule automatic drops to run every minute
     const schedule = '* * * * *';
     cron.schedule(schedule, () => {
       logger.info('Scheduled drop processing triggered');
@@ -44,6 +70,16 @@ class DropScheduler {
     });
     
     logger.info(`Drop scheduler started - will run every minute (cron: ${schedule})`);
+    
+    // Schedule real-time processing every 15 seconds
+    setInterval(() => {
+      logger.debug('Real-time processing triggered');
+      this.processRealTimeDrops().catch(error => {
+        logger.error('Real-time processing failed:', error);
+      });
+    }, 15000); // 15 seconds
+    
+    logger.info('Real-time scheduler started - will run every 15 seconds');
     
     // Also allow manual trigger via process signal
     process.on('SIGUSR1', () => {

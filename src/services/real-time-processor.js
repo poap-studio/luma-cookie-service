@@ -4,7 +4,7 @@ const nodemailer = require('nodemailer');
 const { getPOAPAuthManager } = require('../lib/poap-auth');
 const logger = require('../utils/logger');
 
-class DropProcessor {
+class RealTimeProcessor {
   constructor() {
     this.prisma = new PrismaClient();
     this.isProcessing = false;
@@ -32,9 +32,9 @@ class DropProcessor {
     }
   }
 
-  async processDrops() {
+  async processRealTimeDrops() {
     if (this.isProcessing) {
-      logger.warn('Drop processing already in progress, skipping...');
+      logger.warn('Real-time processing already in progress, skipping...');
       return;
     }
 
@@ -42,16 +42,16 @@ class DropProcessor {
     const startTime = Date.now();
 
     try {
-      logger.info('Starting drop processing...');
+      logger.info('Starting real-time drop processing...');
 
       // Check if POAP API is configured
       if (!process.env.POAP_API_KEY || process.env.POAP_API_KEY === 'placeholder_api_key') {
-        logger.warn('POAP API key not configured, skipping drop processing');
+        logger.warn('POAP API key not configured, skipping real-time processing');
         return;
       }
       
       if (!this.authManager) {
-        logger.warn('POAP OAuth not configured, skipping drop processing');
+        logger.warn('POAP OAuth not configured, skipping real-time processing');
         return;
       }
 
@@ -62,16 +62,13 @@ class DropProcessor {
         return;
       }
 
-      // 2. Get all active Luma drops (excluding real-time drops)
+      // 2. Get all active real-time Luma drops
       const drops = await this.prisma.drop.findMany({
         where: {
           platform: 'luma',
           isActive: true,
-          lumaEventId: { not: null },
-          OR: [
-            { isRealTime: false },
-            { isRealTime: null }
-          ]
+          isRealTime: true,
+          lumaEventId: { not: null }
         },
         include: {
           lumaGuests: true,
@@ -79,24 +76,24 @@ class DropProcessor {
         }
       });
 
-      logger.info(`Found ${drops.length} active Luma drops to process`);
+      logger.info(`Found ${drops.length} active real-time Luma drops to process`);
 
       // 3. Process each drop
       let processedCount = 0;
       for (const drop of drops) {
         try {
-          const processed = await this.processDrop(drop, lumaCookie.cookie);
+          const processed = await this.processRealTimeDrop(drop, lumaCookie.cookie);
           if (processed) processedCount++;
         } catch (error) {
-          logger.error(`Error processing drop ${drop.id}:`, error);
+          logger.error(`Error processing real-time drop ${drop.id}:`, error);
         }
       }
 
       const duration = Date.now() - startTime;
-      logger.info(`Drop processing completed in ${duration}ms. Processed ${processedCount} drops.`);
+      logger.info(`Real-time processing completed in ${duration}ms. Processed ${processedCount} drops.`);
 
     } catch (error) {
-      logger.error('Drop processing failed:', error);
+      logger.error('Real-time processing failed:', error);
     } finally {
       this.isProcessing = false;
     }
@@ -109,66 +106,49 @@ class DropProcessor {
     });
   }
 
-  async processDrop(drop, lumaCookie) {
-    logger.info(`Processing drop ${drop.id} for Luma event ${drop.lumaEventId}`);
+  async processRealTimeDrop(drop, lumaCookie) {
+    logger.info(`Processing real-time drop ${drop.id} for Luma event ${drop.lumaEventId}`);
 
     try {
-      // 1. Check if event has ended
+      // 1. Get event details to check if it's ongoing
       const eventDetails = await this.getLumaEventDetails(drop.lumaEventId, lumaCookie);
       if (!eventDetails) {
         logger.warn(`Could not fetch details for Luma event ${drop.lumaEventId}`);
         return false;
       }
 
-      if (!this.hasEventEnded(eventDetails)) {
-        logger.info(`Event ${drop.lumaEventId} has not ended yet, skipping`);
+      // Check if event is currently happening
+      if (!this.isEventOngoing(eventDetails)) {
+        logger.info(`Event ${drop.lumaEventId} is not currently ongoing`);
         return false;
       }
 
       // Store event name for later use in email
       const eventName = eventDetails.event?.name || drop.lumaEventUrl || 'the event';
 
-      // 2. Get checked-in guests
-      const checkedInGuests = drop.lumaGuests.filter(guest => guest.checkedInAt !== null);
-      logger.info(`Found ${checkedInGuests.length} checked-in guests`);
+      // 2. Find guests who checked in but haven't received POAP
+      const newlyCheckedInGuests = await this.findNewlyCheckedInGuests(drop);
+      
+      if (newlyCheckedInGuests.length === 0) {
+        logger.debug(`No new check-ins for drop ${drop.id}`);
+        return false;
+      }
+
+      logger.info(`Found ${newlyCheckedInGuests.length} newly checked-in guests`);
 
       // 3. Get available POAPs
       const availablePoaps = await this.getAvailablePoaps(drop.poapEventId, drop.poapSecretCode);
       logger.info(`Found ${availablePoaps} available POAPs`);
 
       // 4. Check if we have enough POAPs
-      if (checkedInGuests.length > availablePoaps) {
-        logger.warn(`Not enough POAPs: ${checkedInGuests.length} guests, ${availablePoaps} POAPs available`);
+      if (newlyCheckedInGuests.length > availablePoaps) {
+        logger.warn(`Not enough POAPs for real-time delivery: ${newlyCheckedInGuests.length} guests, ${availablePoaps} POAPs available`);
         return false;
       }
 
-      // 5. Process deliveries based on delivery method
-      const undeliveredGuests = checkedInGuests.filter(guest => {
-        return !drop.lumaDeliveries.some(delivery => delivery.guestId === guest.guestId);
-      });
-
-      logger.info(`${undeliveredGuests.length} guests need POAP delivery`);
-
-      if (undeliveredGuests.length === 0) {
-        logger.info(`All guests already have POAPs delivered`);
-        
-        // Check if drop needs to be marked as delivered
-        if (!drop.poapsDelivered && checkedInGuests.length > 0) {
-          await this.prisma.drop.update({
-            where: { id: drop.id },
-            data: {
-              poapsDelivered: true,
-              deliveredAt: new Date()
-            }
-          });
-          logger.info(`Drop ${drop.id} marked as fully delivered (all guests already had POAPs)`);
-        }
-        
-        return false;
-      }
-
+      // 5. Deliver POAPs to newly checked-in guests
       let deliveredCount = 0;
-      for (const guest of undeliveredGuests) {
+      for (const guest of newlyCheckedInGuests) {
         try {
           if (drop.deliveryTarget === 'email') {
             await this.deliverPoapByEmail(drop, guest, eventName);
@@ -184,32 +164,23 @@ class DropProcessor {
         }
       }
 
-      logger.info(`Delivered POAPs to ${deliveredCount} guests`);
-      
-      // Check if all checked-in guests have been delivered
-      const allDelivered = checkedInGuests.every(guest => 
-        drop.lumaDeliveries.some(delivery => delivery.guestId === guest.guestId) ||
-        undeliveredGuests.find(u => u.guestId === guest.guestId) // newly delivered
-      );
-      
-      if (allDelivered && deliveredCount > 0) {
-        // Mark drop as fully delivered
-        await this.prisma.drop.update({
-          where: { id: drop.id },
-          data: {
-            poapsDelivered: true,
-            deliveredAt: new Date()
-          }
-        });
-        logger.info(`Drop ${drop.id} marked as fully delivered`);
-      }
-      
+      logger.info(`Delivered POAPs to ${deliveredCount} guests in real-time`);
       return deliveredCount > 0;
 
     } catch (error) {
-      logger.error(`Error processing drop ${drop.id}:`, error);
+      logger.error(`Error processing real-time drop ${drop.id}:`, error);
       return false;
     }
+  }
+
+  async findNewlyCheckedInGuests(drop) {
+    // Find guests who have checked in but don't have a delivery record
+    const checkedInGuests = drop.lumaGuests.filter(guest => 
+      guest.checkedInAt !== null &&
+      !drop.lumaDeliveries.some(delivery => delivery.guestId === guest.guestId)
+    );
+
+    return checkedInGuests;
   }
 
   async getLumaEventDetails(eventId, cookie) {
@@ -231,11 +202,25 @@ class DropProcessor {
     }
   }
 
-  hasEventEnded(eventDetails) {
-    if (!eventDetails.event || !eventDetails.event.end_at) {
+  isEventOngoing(eventDetails) {
+    if (!eventDetails.event || !eventDetails.event.start_at) {
       return false;
     }
-    return new Date(eventDetails.event.end_at) < new Date();
+    
+    const now = new Date();
+    const startTime = new Date(eventDetails.event.start_at);
+    const endTime = eventDetails.event.end_at ? new Date(eventDetails.event.end_at) : null;
+    
+    // Event is ongoing if it has started and hasn't ended yet
+    if (startTime > now) {
+      return false; // Event hasn't started
+    }
+    
+    if (endTime && endTime < now) {
+      return false; // Event has ended
+    }
+    
+    return true; // Event is ongoing
   }
 
   async getAvailablePoaps(eventId, secretCode) {
@@ -268,7 +253,7 @@ class DropProcessor {
   }
 
   async deliverPoapByEmail(drop, guest, eventName) {
-    logger.info(`Delivering POAP by email to ${guest.email}`);
+    logger.info(`Delivering POAP by email to ${guest.email} (real-time)`);
 
     // 1. Get mint link
     const mintLink = await this.getMintLink(drop.poapEventId, drop.poapSecretCode);
@@ -282,7 +267,7 @@ class DropProcessor {
       .replace(/{{name}}/g, guest.name)
       .replace(/{{firstName}}/g, guest.firstName || guest.name)
       .replace(/{{mintLink}}/g, mintLink)
-      .replace(/{{poapLink}}/g, mintLink)  // Support both {{mintLink}} and {{poapLink}}
+      .replace(/{{poapLink}}/g, mintLink)
       .replace(/{{eventName}}/g, eventName);
 
     // Also replace variables in subject
@@ -301,7 +286,7 @@ class DropProcessor {
     // 3. Send email
     if (this.emailTransporter) {
       await this.emailTransporter.sendMail(mailOptions);
-      logger.info(`Email sent to ${guest.email}`);
+      logger.info(`Email sent to ${guest.email} (real-time)`);
     } else {
       logger.warn('Email transporter not configured, skipping email delivery');
       return;
@@ -326,7 +311,7 @@ class DropProcessor {
       return;
     }
 
-    logger.info(`Delivering POAP to address ${guest.ethAddress}`);
+    logger.info(`Delivering POAP to address ${guest.ethAddress} (real-time)`);
 
     try {
       if (!this.authManager) {
@@ -392,7 +377,7 @@ class DropProcessor {
         }
       );
 
-      logger.info(`POAP claimed for address ${guest.ethAddress}`);
+      logger.info(`POAP claimed for address ${guest.ethAddress} (real-time)`);
 
       // Record delivery
       await this.prisma.lumaDelivery.create({
@@ -448,12 +433,11 @@ class DropProcessor {
     }
   }
 
-
   getDefaultEmailBody() {
     return `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2>Hello {{firstName}}!</h2>
-        <p>Thank you for attending {{eventName}}!</p>
+        <p>Thank you for checking in at {{eventName}}!</p>
         
         <p>Your POAP is ready to claim. Click the link below to mint your attendance token:</p>
         
@@ -477,4 +461,4 @@ class DropProcessor {
   }
 }
 
-module.exports = { DropProcessor };
+module.exports = { RealTimeProcessor };
